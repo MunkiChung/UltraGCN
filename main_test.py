@@ -44,13 +44,14 @@ def data_param_prepare(config):
     train_file_path = config['Training']['train_file_path']
     gpu = config['Training']['gpu']
     params['gpu'] = gpu
-    device = torch.device('cuda:' + params['gpu'])
+    device = torch.device('cuda:' + params['gpu'] if torch.cuda.is_available() else "cpu")
     params['device'] = device
     lr = config.getfloat('Training', 'learning_rate')
     params['lr'] = lr
     batch_size = config.getint('Training', 'batch_size')
     params['batch_size'] = batch_size
-    params['early_stop_epoch'] = 10
+    early_stop_epoch = config.getint('Training', 'early_stop_epoch')
+    params['early_stop_epoch'] = early_stop_epoch
     w1 = config.getfloat('Training', 'w1')
     w2 = config.getfloat('Training', 'w2')
     w3 = config.getfloat('Training', 'w3')
@@ -414,7 +415,7 @@ def train(model: UltraGCN, optimizer, train_loader, test_loader, mask, test_grou
             writer.add_scalar("Loss/train_epoch", loss, epoch)
 
         need_test = True
-        if epoch < 50 or epoch % 5 != 0:
+        if epoch < 50 and epoch % 5 != 0:
             need_test = False
 
         if need_test:
@@ -609,36 +610,40 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print('###################### UltraGCN ######################')
-    config_file = "electronics_config.ini"
-    config = configparser.ConfigParser()
-    config.read(config_file)
-    for data_type in ["CRSP", "THOMSON13f"]:
-        for target_year in range(2006, 2016):
-            result_save_path = f"./{data_type}/{target_year}/UltraGCN2"
-            if not os.path.exists(result_save_path):
-                os.makedirs(result_save_path)
-            model_save_path = f"./model_save/{data_type}/{target_year}"
-            if not os.path.exists(model_save_path):
-                os.makedirs(model_save_path)
-            config["Training"]["dataset"] = f"{data_type}/{target_year}/"
-            config["Training"]["train_file_path"] = f"./data/{data_type}/{target_year}/train.txt"
-            config["Model"]["model_save_path"] = model_save_path
-            config["Model"]["result_save_path"] = result_save_path
-            config["Testing"]["test_file_path"] = f"./data/{data_type}/{target_year}/valid.txt"
 
-            print('1. Loading Configuration...')
-            params, constraint_mat, ii_constraint_mat, ii_neighbor_mat, train_loader, test_loader, \
-            mask, test_ground_truth_list, interacted_items = data_param_prepare(config)
+    for i, config_file in enumerate(
+            ["amazon_config.ini", "amazoncds_config.ini", "electronics_config.ini", "gowalla_config.ini",
+             "ml-1m_config.ini", "yelp2018_config.ini"]):
+        config = configparser.ConfigParser()
+        config.read(config_file)
 
-            print('Load Configuration OK, show them below')
-            print('Configuration:')
-            print(params)
+        data_type = "CRSP"
+        target_year = 2015
+        result_save_path = f"./candidate{i}"
+        if not os.path.exists(result_save_path):
+            os.makedirs(result_save_path)
+        model_save_path = f"./model_save/{data_type}/{target_year}"
+        if not os.path.exists(model_save_path):
+            os.makedirs(model_save_path)
+        config["Training"]["dataset"] = f"{data_type}/{target_year}/"
+        config["Training"]["train_file_path"] = f"./data/{data_type}/{target_year}/train.txt"
+        config["Model"]["model_save_path"] = model_save_path
+        config["Model"]["result_save_path"] = result_save_path
+        config["Testing"]["test_file_path"] = f"./data/{data_type}/{target_year}/valid.txt"
 
-            ultragcn = UltraGCN(params, constraint_mat, ii_constraint_mat, ii_neighbor_mat)
-            ultragcn = ultragcn.to(params['device'])
-            optimizer = torch.optim.Adam(ultragcn.parameters(), lr=params['lr'])
+        print('1. Loading Configuration...')
+        params, constraint_mat, ii_constraint_mat, ii_neighbor_mat, train_loader, test_loader, \
+        mask, test_ground_truth_list, interacted_items = data_param_prepare(config)
 
-            train(ultragcn, optimizer, train_loader, test_loader, mask, test_ground_truth_list, interacted_items,
-                  params)
+        print('Load Configuration OK, show them below')
+        print('Configuration:')
+        print(params)
 
-            print('END')
+        ultragcn = UltraGCN(params, constraint_mat, ii_constraint_mat, ii_neighbor_mat)
+        ultragcn = ultragcn.to(params['device'])
+        optimizer = torch.optim.Adam(ultragcn.parameters(), lr=params['lr'])
+
+        train(ultragcn, optimizer, train_loader, test_loader, mask, test_ground_truth_list, interacted_items,
+              params)
+
+        print('END')
