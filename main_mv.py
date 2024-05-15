@@ -9,7 +9,7 @@ import numpy as np
 import torch.utils.data as data
 import scipy.sparse as sp
 import os
-import gc
+import itertools
 import configparser
 import time
 import argparse
@@ -421,39 +421,39 @@ def train(model: UltraGCN, optimizer, train_loader, test_loader, mask, test_grou
         if params['enable_tensorboard']:
             writer.add_scalar("Loss/train_epoch", loss, epoch)
 
-        need_test = True
-        if epoch < 50 or epoch % 5 != 0:
-            need_test = False
+        # need_test = True
+        # if epoch < 50 or epoch % 5 != 0:
+        #     need_test = False
+        #
+        # if need_test:
+        #     start_time = time.time()
+        #     F1_score, Precision, Recall, NDCG = evaluate(model, test_loader, test_ground_truth_list, mask,
+        #                                                  params['topk'], params['user_num'])
+        #     if params['enable_tensorboard']:
+        #         writer.add_scalar('Results/recall@20', Recall, epoch)
+        #         writer.add_scalar('Results/ndcg@20', NDCG, epoch)
+        #     test_time = time.strftime("%H: %M: %S", time.gmtime(time.time() - start_time))
+        #
+        #     print('The time for epoch {} is: train time = {}, test time = {}'.format(epoch, train_time, test_time))
+        #     print(
+        #         "Loss = {:.5f}, F1-score: {:5f} \t Precision: {:.5f}\t Recall: {:.5f}\tNDCG: {:.5f}".format(loss.item(),
+        #                                                                                                     F1_score,
+        #                                                                                                     Precision,
+        #                                                                                                     Recall,
+        #                                                                                                     NDCG))
+        #
+        #     # if Recall > best_recall:
+        #     best_recall, best_ndcg, best_epoch = Recall, NDCG, epoch
+        early_stop_count = 0
+        torch.save(model.state_dict(), params['model_save_path'] + "/ultragcn.pt")
+        scores = model.test_foward(torch.Tensor(np.arange(model.user_num))).cpu()
+        scores = scores.detach().numpy()
+        save_pickle(scores, params['result_save_path'] + f"/epoch_{epoch}.pkl")
 
-        if need_test:
-            start_time = time.time()
-            F1_score, Precision, Recall, NDCG = evaluate(model, test_loader, test_ground_truth_list, mask,
-                                                         params['topk'], params['user_num'])
-            if params['enable_tensorboard']:
-                writer.add_scalar('Results/recall@20', Recall, epoch)
-                writer.add_scalar('Results/ndcg@20', NDCG, epoch)
-            test_time = time.strftime("%H: %M: %S", time.gmtime(time.time() - start_time))
-
-            print('The time for epoch {} is: train time = {}, test time = {}'.format(epoch, train_time, test_time))
-            print(
-                "Loss = {:.5f}, F1-score: {:5f} \t Precision: {:.5f}\t Recall: {:.5f}\tNDCG: {:.5f}".format(loss.item(),
-                                                                                                            F1_score,
-                                                                                                            Precision,
-                                                                                                            Recall,
-                                                                                                            NDCG))
-
-            if Recall > best_recall:
-                best_recall, best_ndcg, best_epoch = Recall, NDCG, epoch
-                early_stop_count = 0
-                torch.save(model.state_dict(), params['model_save_path'] + "/ultragcn.pt")
-                scores = model.test_foward(torch.Tensor(np.arange(model.user_num))).cpu()
-                scores = scores.detach().numpy()
-                save_pickle(scores, params['result_save_path'] + f"/epoch_{epoch}.pkl")
-
-            else:
-                early_stop_count += 1
-                if early_stop_count == params['early_stop_epoch']:
-                    early_stop = True
+            # else:
+            #     early_stop_count += 1
+            #     if early_stop_count == params['early_stop_epoch']:
+            #         early_stop = True
 
         if early_stop:
             print('##########################################')
@@ -616,16 +616,21 @@ if __name__ == "__main__":
     parser.add_argument('--config_file', type=str, help='config file path')
     args = parser.parse_args()
 
-    print('###################### UltraGCN ######################')
     config_file = "mvecf_config.ini"
     config = configparser.ConfigParser()
     config.read(config_file)
-    for data_type in ["CRSP", "THOMSON13f"]:
-        for target_year in range(2006, 2016):
-            result_save_path = f"./{data_type}/{target_year}/UltraGCN"
+    positive_score_cri_dict = pd.read_pickle("neg_to_pos_cri.pkl")
+
+    model_name = "UltraGCN_mv"
+    for data_type, target_year in itertools.product(["CRSP", "THOMSON13f"], range(2006, 2016)):
+        for reg_param_mv in [1, 5, ]:
+            positive_score_cri = positive_score_cri_dict.loc[(data_type, target_year), (0.01, reg_param_mv)]
+
+            print(f'###################### UltraGCN - {data_type}, {target_year}, {reg_param_mv} ######################')
+            result_save_path = f"./{data_type}/{target_year}/{model_name}/mv_param{reg_param_mv}"
             if not os.path.exists(result_save_path):
                 os.makedirs(result_save_path)
-            model_save_path = f"./model_save/{data_type}/{target_year}"
+            model_save_path = f"./model_save/{data_type}/{target_year}/mv_param{reg_param_mv}"
             if not os.path.exists(model_save_path):
                 os.makedirs(model_save_path)
             config["Training"]["dataset"] = f"{data_type}/{target_year}/"
@@ -635,8 +640,19 @@ if __name__ == "__main__":
             config["Testing"]["test_file_path"] = f"./data/{data_type}/{target_year}/valid.txt"
 
             print('1. Loading Configuration...')
+            holdings_data, factor_params = get_data(data_type, target_year)
+            input_train = pd.DataFrame(holdings_data["train_data"].T, columns=["userID", "itemID", "rating"])
+            input_test = pd.DataFrame(holdings_data["valid_data"].T, columns=["userID", "itemID", "rating"])
+
+            gamma = 3
+            alpha = 10
+
+            data_sampler = ImplicitCF(train=input_train, test=input_test, alpha=alpha,
+                                      factor_params=factor_params, reg_param_mv=reg_param_mv, gamma=gamma,
+                                      positive_score_cri=positive_score_cri)
+
             params, constraint_mat, ii_constraint_mat, ii_neighbor_mat, train_loader, test_loader, \
-            mask, test_ground_truth_list, interacted_items = data_param_prepare(config)
+            mask, test_ground_truth_list, interacted_items = data_param_prepare(config, data_sampler)
 
             print('Load Configuration OK, show them below')
             print('Configuration:')
