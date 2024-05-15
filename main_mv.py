@@ -619,12 +619,12 @@ if __name__ == "__main__":
     config_file = "mvecf_config.ini"
     config = configparser.ConfigParser()
     config.read(config_file)
-    positive_score_cri_dict = pd.read_pickle("neg_to_pos_cri.pkl")
+    cri_df = pd.read_pickle("neg_to_pos_cri.pkl")
 
     model_name = "UltraGCN_mv"
     for data_type, target_year in itertools.product(["CRSP", "THOMSON13f"], range(2006, 2016)):
-        for reg_param_mv in [1, 5, ]:
-            positive_score_cri = positive_score_cri_dict.loc[(data_type, target_year), (0.01, reg_param_mv)]
+        for reg_param_mv in [10]:
+            positive_score_cri = cri_df.loc[(data_type, target_year), (0.01, reg_param_mv)]
 
             print(f'###################### UltraGCN - {data_type}, {target_year}, {reg_param_mv} ######################')
             result_save_path = f"./{data_type}/{target_year}/{model_name}/mv_param{reg_param_mv}"
